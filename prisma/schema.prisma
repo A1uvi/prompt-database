@@ -1,0 +1,261 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// NextAuth.js models
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// User & Authentication
+model User {
+  id            String    @id @default(cuid())
+  username      String    @unique
+  password      String
+  email         String?   @unique
+  name          String?
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts          Account[]
+  sessions          Session[]
+  ownedPrompts      Prompt[]          @relation("PromptOwner")
+  coCreatedPrompts  PromptCoCreator[]
+  ownedFolders      Folder[]          @relation("FolderOwner")
+  teamMemberships   TeamMember[]
+  createdTeams      Team[]            @relation("TeamCreator")
+  activityLogs      ActivityLog[]
+
+  @@index([email])
+  @@index([username])
+}
+
+// Folders for Organization
+model Folder {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  ownerId     String
+  parentId    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner    User     @relation("FolderOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  parent   Folder?  @relation("FolderHierarchy", fields: [parentId], references: [id])
+  children Folder[] @relation("FolderHierarchy")
+  prompts  Prompt[]
+
+  @@index([ownerId])
+  @@index([parentId])
+}
+
+// Prompts (Core Content)
+model Prompt {
+  id          String     @id @default(cuid())
+  title       String
+  content     String     @db.Text
+  contentUrl  String?
+  usageNotes  String?    @db.Text
+  contentType PromptType @default(PROMPT)
+
+  // Flexible fields (JSONB)
+  variables      Json?
+  exampleIO      Json?
+  tags           String[]
+  customSections Json?
+  metadata       Json?
+
+  ownerId    String
+  folderId   String?
+  visibility Visibility @default(PRIVATE)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  owner        User               @relation("PromptOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  folder       Folder?            @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  coCreators   PromptCoCreator[]
+  teamAccess   PromptTeamAccess[]
+  versions     PromptVersion[]
+  activityLogs ActivityLog[]
+
+  @@index([ownerId])
+  @@index([folderId])
+  @@index([visibility])
+  @@index([contentType])
+  @@index([tags])
+}
+
+// Co-creators (Edit Access)
+model PromptCoCreator {
+  id       String   @id @default(cuid())
+  promptId String
+  userId   String
+  addedAt  DateTime @default(now())
+
+  prompt Prompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([promptId, userId])
+  @@index([userId])
+}
+
+// Teams
+model Team {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  creatorId   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  creator      User               @relation("TeamCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  members      TeamMember[]
+  promptAccess PromptTeamAccess[]
+
+  @@index([creatorId])
+}
+
+model TeamMember {
+  id       String   @id @default(cuid())
+  teamId   String
+  userId   String
+  role     TeamRole @default(MEMBER)
+  joinedAt DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([userId])
+}
+
+// Team-Based Access Control
+model PromptTeamAccess {
+  id        String   @id @default(cuid())
+  promptId  String
+  teamId    String
+  grantedAt DateTime @default(now())
+
+  prompt Prompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([promptId, teamId])
+  @@index([teamId])
+}
+
+// Version History (Immutable Records)
+model PromptVersion {
+  id             String   @id @default(cuid())
+  promptId       String
+  version        Int
+  title          String
+  content        String   @db.Text
+  contentUrl     String?
+  usageNotes     String?  @db.Text
+  variables      Json?
+  exampleIO      Json?
+  tags           String[]
+  customSections Json?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+  createdBy      String
+
+  prompt Prompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+
+  @@unique([promptId, version])
+  @@index([promptId])
+}
+
+// Activity Tracking
+model ActivityLog {
+  id        String       @id @default(cuid())
+  userId    String
+  promptId  String?
+  action    ActivityType
+  metadata  Json?
+  createdAt DateTime     @default(now())
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  prompt Prompt? @relation(fields: [promptId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([promptId])
+  @@index([createdAt])
+}
+
+// Enums
+enum PromptType {
+  PROMPT
+  TEMPLATE
+  CONVERSATION
+  CONVERSATION_SUMMARY
+  META_NOTE
+  PROMPT_WITH_EXAMPLES
+}
+
+enum Visibility {
+  PRIVATE
+  PUBLIC
+  TEAM
+}
+
+enum TeamRole {
+  ADMIN
+  MEMBER
+}
+
+enum ActivityType {
+  CREATED
+  UPDATED
+  VIEWED
+  SHARED
+  COPIED
+  MOVED
+  DELETED
+}
